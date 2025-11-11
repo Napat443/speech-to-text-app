@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>พูดแล้วพิมพ์ (Web Speech API)</title>
+    <!-- โหลด Tailwind CSS เพื่อการออกแบบที่สวยงามและ Responsive -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* กำหนดฟอนต์หลักเป็น Inter (ถ้ามี) และ Fallback เป็น Sans-serif */
+        body {
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+            background-color: #f7f7f7;
+            min-height: 100vh;
+        }
+        /* Style สำหรับปุ่มเมื่อกำลังฟัง */
+        .listening-btn {
+            background-color: #ef4444 !important; /* Red 500 */
+            box-shadow: 0 4px 10px rgba(239, 68, 68, 0.4);
+            animation: pulse-red 1.5s infinite;
+        }
+        @keyframes pulse-red {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .not-listening-btn {
+            background-color: #10b981 !important; /* Emerald 500 */
+            box-shadow: 0 4px 10px rgba(16, 185, 129, 0.4);
+        }
+    </style>
+</head>
+<body class="p-4 flex flex-col items-center justify-start">
+
+    <!-- Container หลัก -->
+    <div class="max-w-xl w-full bg-white p-6 md:p-8 rounded-xl shadow-2xl mt-8">
+        <h1 class="text-3xl font-extrabold text-gray-900 mb-6 border-b pb-3 text-center">
+            🎙️ พูดแล้วพิมพ์
+        </h1>
+        
+        <!-- ปุ่มควบคุม -->
+        <button id="startStopButton" 
+                class="not-listening-btn w-full md:w-auto px-8 py-3 text-lg font-bold rounded-full transition duration-300 transform hover:scale-105 mb-4 text-white">
+            เริ่มพูด
+        </button>
+        
+        <!-- สถานะ -->
+        <div id="status" class="text-sm text-gray-500 mb-6 p-2 rounded-lg bg-gray-50 text-center">
+            คลิก "เริ่มพูด" และอนุญาตการใช้ไมโครโฟน
+        </div>
+        
+        <!-- พื้นที่แสดงผลข้อความ -->
+        <div class="text-left">
+            <h2 class="text-xl font-semibold text-gray-700 mb-3">ข้อความที่แปลง:</h2>
+            <div id="outputContainer" class="bg-gray-100 border border-gray-300 p-4 min-h-[150px] rounded-lg shadow-inner overflow-y-auto max-h-96">
+                <!-- ข้อความที่แปลงจะปรากฏที่นี่ -->
+                <p id="output" class="text-gray-800 whitespace-pre-wrap"></p>
+                <p id="interim" class="text-gray-500 italic"></p>
+            </div>
+        </div>
+
+        <!-- ปุ่มล้างข้อความ -->
+        <button id="clearButton" 
+                class="w-full mt-6 px-4 py-2 text-sm font-semibold text-white bg-red-500 rounded-lg hover:bg-red-600 transition duration-150">
+            ล้างข้อความทั้งหมด
+        </button>
+    </div>
+
+    <!-- JavaScript Logic -->
+    <script>
+        // ตรวจสอบ Web Speech API พร้อมการรองรับ Prefix
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+        const startStopButton = document.getElementById('startStopButton');
+        const output = document.getElementById('output');
+        const interim = document.getElementById('interim');
+        const statusDiv = document.getElementById('status');
+        const clearButton = document.getElementById('clearButton');
+
+        let recognition;
+        let isListening = false;
+        let finalTranscript = ''; // เก็บข้อความสุดท้ายทั้งหมด
+
+        // 1. ตรวจสอบการรองรับ API
+        if (!SpeechRecognition) {
+            statusDiv.innerHTML = '<span class="text-red-600 font-bold">⚠️ ขออภัย: เบราว์เซอร์ของคุณไม่รองรับ Web Speech API</span>';
+            startStopButton.disabled = true;
+            startStopButton.textContent = 'ไม่รองรับ';
+            startStopButton.classList.add('bg-gray-400', 'cursor-not-allowed');
+        } else {
+            // 2. สร้างวัตถุ SpeechRecognition และตั้งค่า
+            recognition = new SpeechRecognition();
+            
+            recognition.lang = 'th-TH';       // กำหนดภาษาเป็นภาษาไทย
+            recognition.continuous = true;    // รับฟังต่อเนื่อง
+            recognition.interimResults = true; // แสดงผลลัพธ์ชั่วคราว
+            
+            // 3. จัดการเหตุการณ์ (Events)
+            
+            recognition.onstart = function() {
+                isListening = true;
+                startStopButton.textContent = 'กำลังฟัง... (คลิกเพื่อหยุด)';
+                statusDiv.textContent = 'กำลังฟัง... กรุณาพูด';
+                startStopButton.classList.remove('not-listening-btn');
+                startStopButton.classList.add('listening-btn');
+                interim.textContent = ''; // ล้างข้อความชั่วคราวเมื่อเริ่ม
+            };
+
+            recognition.onresult = function(event) {
+                let currentInterim = '';
+                let newFinal = '';
+
+                // วนลูปเพื่อหาข้อความชั่วคราว (Interim) และข้อความสุดท้าย (Final)
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const transcript = event.results[i][0].transcript;
+                    
+                    if (event.results[i].isFinal) {
+                        newFinal += transcript + '\n';
+                    } else {
+                        currentInterim += transcript;
+                    }
+                }
+                
+                // อัปเดตข้อความสุดท้ายทั้งหมด
+                if (newFinal) {
+                    finalTranscript += newFinal;
+                    output.textContent = finalTranscript;
+                }
+                
+                // อัปเดตข้อความชั่วคราว (แสดงทันทีขณะพูด)
+                interim.textContent = currentInterim;
+            };
+            
+            recognition.onend = function() {
+                isListening = false;
+                startStopButton.textContent = 'เริ่มพูด';
+                statusDiv.textContent = 'หยุดรับฟังแล้ว คลิก "เริ่มพูด" เพื่อเริ่มอีกครั้ง';
+                startStopButton.classList.remove('listening-btn');
+                startStopButton.classList.add('not-listening-btn');
+                interim.textContent = ''; // ล้างข้อความชั่วคราวเมื่อหยุด
+            };
+
+            recognition.onerror = function(event) {
+                statusDiv.textContent = '🔴 เกิดข้อผิดพลาด: ' + event.error;
+                isListening = false;
+                startStopButton.textContent = 'เริ่มพูด';
+                startStopButton.classList.remove('listening-btn');
+                startStopButton.classList.add('not-listening-btn');
+                // หากเป็นข้อผิดพลาดที่เกิดจากการอนุญาตไมค์
+                if (event.error === 'not-allowed') {
+                    statusDiv.innerHTML = '<span class="text-red-600 font-bold">⚠️ การเข้าถึงไมโครโฟนถูกปฏิเสธ. กรุณาตรวจสอบการตั้งค่าเบราว์เซอร์ของคุณ.</span>';
+                }
+            };
+
+            // 4. จัดการปุ่มเริ่ม/หยุด
+            startStopButton.addEventListener('click', () => {
+                if (isListening) {
+                    recognition.stop();
+                } else {
+                    recognition.start();
+                }
+            });
+
+            // 5. จัดการปุ่มล้างข้อความ
+            clearButton.addEventListener('click', () => {
+                finalTranscript = '';
+                output.textContent = '';
+                interim.textContent = '';
+                statusDiv.textContent = 'ข้อความถูกล้างแล้ว เริ่มพูดเพื่อเริ่มใหม่';
+            });
+        }
+    </script>
+</body>
+</html>
